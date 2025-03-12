@@ -1,0 +1,12 @@
+src/
+├── websockets/
+│   ├── controllers/
+│   │   └── websocket.controller.ts
+│   ├── handlers/
+│   │   ├── chat.handler.ts
+│   │   └── notification.handler.ts
+│   ├── middleware/
+│   │   └── websocket.middleware.ts
+│   ├── types/
+│   │   └── websocket.types.ts
+│   └── routes.ts

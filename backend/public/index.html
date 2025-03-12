@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chat App</title>
+    <link rel="stylesheet" href="index.css">
+</head>
+<body>
+    <!-- Schermata di login/registrazione -->
+    <div id="auth-screen" class="auth-screen">
+        <h1>Chat App</h1>
+        <div id="login-form" class="form-container">
+            <h2>Login</h2>
+            <input type="email" id="login-email" placeholder="Email" required />
+            <input type="password" id="login-password" placeholder="Password" required />
+            <button id="login-button">Login</button>
+            <p>Non hai un account? <a href="#" id="switch-to-register">Registrati</a></p>
+        </div>
+        <div id="register-form" class="form-container" style="display: none;">
+            <h2>Registrazione</h2>
+            <input type="email" id="register-email" placeholder="Email" required />
+            <input type="password" id="register-password" placeholder="Password" required />
+            <input type="text" id="register-username" placeholder="Username" required />
+            <button id="register-button">Registrati</button>
+            <p>Hai già un account? <a href="#" id="switch-to-login">Accedi</a></p>
+        </div>
+    </div>
+
+    <!-- Schermata della chat -->
+    <div id="chat-screen" class="container" style="display: none;">
+        <!-- Sidebar con gli utenti online -->
+        <div class="sidebar">
+            <h2>Utenti Online</h2>
+            <ul id="online-users"></ul>
+        </div>
+
+        <!-- Finestra principale della chat -->
+        <div class="chat">
+            <div id="messages" class="messages"></div>
+            <div class="message-input">
+                <input type="text" id="message-input" placeholder="Scrivi un messaggio..." />
+                <button id="send-button">Invia</button>
+            </div>
+            <div class="file-upload">
+                <input type="file" id="file-input" />
+                <button id="upload-button">Condividi File</button>
+              </div>
+
+            </div>
+        </div>
+    </div>
+
+    <script src="index.js"></script>
+</body>
+</html>
