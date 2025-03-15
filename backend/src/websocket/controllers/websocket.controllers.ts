@@ -2,6 +2,9 @@ import { WebSocket, WebSocketServer } from 'ws';
 import http from 'http';
 import jwt from 'jsonwebtoken';
 import { PrismaClient, User, Message } from '@prisma/client';
+import * as path from 'path';
+import * as mime from 'mime-types';
+import * as fs from 'fs';
 
 const prisma = new PrismaClient();
 
@@ -16,6 +19,9 @@ interface ChatMessageData {
     content: string;
     receiverId?: number;
     fileUrl?: string;
+    fileName?: string;
+    fileType?: string;
+    fileSize?: number;
 }
 
 // Interfaccia per ExtendedWebSocket
@@ -62,7 +68,15 @@ export const handleWebSocketConnection = async (
                 const parsedMessage: WebSocketMessage = JSON.parse(message.toString());
 
                 if (parsedMessage.type === 'chat_message') {
-                    const { content, receiverId, fileUrl } = parsedMessage.data as ChatMessageData;
+                    const { content, receiverId } = parsedMessage.data as ChatMessageData;
+
+                    // Verifica se ci sono informazioni sul file
+                    const fileData = {
+                        fileUrl: parsedMessage.data.fileUrl || null,
+                        fileSize: parsedMessage.data.fileSize || null,
+                    };
+
+                    console.log('Ricevuto messaggio con file:', fileData);
 
                     // Salva il messaggio nel database
                     const savedMessage: Message = await prisma.message.create({
@@ -70,7 +84,8 @@ export const handleWebSocketConnection = async (
                             content,
                             senderId: ws.userId!,
                             receiverId: receiverId || null,
-                            fileUrl: fileUrl || null,
+                            fileUrl: fileData.fileUrl,
+                            fileSize: fileData.fileSize,
                         },
                         include: {
                             sender: true,
@@ -81,27 +96,24 @@ export const handleWebSocketConnection = async (
                     // Invia il messaggio al destinatario specifico
                     wss.clients.forEach((client) => {
                         const clientWs = client as ExtendedWebSocket;
-                        if (clientWs.readyState === WebSocket.OPEN && clientWs.userId === receiverId) {
-                            clientWs.send(JSON.stringify({ type: 'new_message', data: savedMessage }));
+                        if (clientWs.readyState === WebSocket.OPEN &&
+                            (clientWs.userId === receiverId || clientWs.userId === ws.userId)) {
+                            clientWs.send(JSON.stringify({
+                                type: 'new_message',
+                                data: savedMessage
+                            }));
                         }
                     });
+                } else if (parsedMessage.type === 'file_upload') {
+                    // Gestione specifica per l'upload di file
+                    console.log('Ricevuta richiesta di upload file');
+                    // Qui puoi aggiungere logica specifica per i file
                 }
             } catch (error) {
                 console.error('Errore durante la gestione del messaggio:', error);
             }
         });
-
-        // Notifica agli altri utenti che questo utente è offline
-        ws.on('close', () => {
-            wss.clients.forEach((client) => {
-                const clientWs = client as ExtendedWebSocket;
-                if (clientWs.readyState === WebSocket.OPEN && clientWs.userId) {
-                    clientWs.send(JSON.stringify({ type: 'user_offline', data: { userId: ws.userId } }));
-                }
-            });
-        });
     } catch (error) {
-        console.error('Errore durante la connessione WebSocket:', error);
-        ws.close(500, 'Internal server error');
+        console.error('Errore durante la gestione della connessione WebSocket:', error);
     }
 };

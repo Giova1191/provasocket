@@ -8,8 +8,9 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { Server as WebSocketServer } from 'ws';
 import WebSocket from 'ws';
+import multer from 'multer';
 import dotenv from 'dotenv';
-import { upload } from './middleware/uploadMiddleware';
+import { upload as uploadMiddleware } from './middleware/uploadMiddleware';
 
 // Carica le variabili d'ambiente
 dotenv.config();
@@ -27,7 +28,7 @@ declare global {
 
 // Estendi l'interfaccia WebSocket per includere proprietà aggiuntive
 interface ExtendedWebSocket extends WebSocket {
-  // Rimossa la proprietà url che causava l'errore
+  url: string; // Assicurati che sia sempre una stringa
   userId?: number;
   username?: string;
 }
@@ -45,7 +46,6 @@ function authenticate(req: Request, res: Response, next: NextFunction): void {
   if (!token) {
     return void res.status(401).json({ message: 'Unauthorized: Missing token' });
   }
-
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET || 'secret') as { userId: number };
     req.user = { id: decoded.userId }; // Aggiungi l'ID dell'utente alla richiesta
@@ -58,16 +58,13 @@ function authenticate(req: Request, res: Response, next: NextFunction): void {
 // Endpoint per il login
 app.post('/api/auth/login', async (req: Request, res: Response): Promise<void> => {
   const { email, password } = req.body;
-
   try {
     const user = await prisma.user.findUnique({
       where: { email },
     });
-
     if (!user || !(await bcrypt.compare(password, user.password))) {
       return void res.status(401).json({ message: 'Invalid credentials' });
     }
-
     const token = jwt.sign({ userId: user.id }, process.env.JWT_SECRET || 'secret', { expiresIn: '24h' });
     return void res.json({ token, user: { id: user.id, username: user.username, email: user.email } });
   } catch (error) {
@@ -79,22 +76,17 @@ app.post('/api/auth/login', async (req: Request, res: Response): Promise<void> =
 // Endpoint per la registrazione
 app.post('/api/auth/register', async (req: Request, res: Response): Promise<void> => {
   const { email, password, username } = req.body;
-
   try {
     const existingUser = await prisma.user.findFirst({
       where: { OR: [{ email }, { username }] },
     });
-
     if (existingUser) {
       return void res.status(409).json({ message: 'Email or username already exists' });
     }
-
     const hashedPassword = await bcrypt.hash(password, 10);
-
     const user = await prisma.user.create({
       data: { email, password: hashedPassword, username },
     });
-
     const token = jwt.sign({ userId: user.id }, process.env.JWT_SECRET || 'secret', { expiresIn: '24h' });
     return void res.status(201).json({ token, user: { id: user.id, username: user.username, email: user.email } });
   } catch (error) {
@@ -107,11 +99,9 @@ app.post('/api/auth/register', async (req: Request, res: Response): Promise<void
 app.get('/api/messages', authenticate, async (req: Request, res: Response): Promise<void> => {
   const { recipientId } = req.query;
   const userId = req.user?.id;
-
   if (!userId) {
     return void res.status(400).json({ message: 'Missing userId' });
   }
-
   try {
     let messages;
     if (recipientId) {
@@ -141,7 +131,6 @@ app.get('/api/messages', authenticate, async (req: Request, res: Response): Prom
         orderBy: { createdAt: 'asc' },
       });
     }
-
     return void res.json(messages);
   } catch (error) {
     console.error('Errore durante il recupero dei messaggi:', error);
@@ -149,19 +138,41 @@ app.get('/api/messages', authenticate, async (req: Request, res: Response): Prom
   }
 });
 
-// Endpoint per ottenere la lista degli utenti online
-app.get('/api/users/online', authenticate, async (req: Request, res: Response): Promise<void> => {
+// Configura multer per il caricamento dei file
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const uploadDir = path.join(__dirname, '../uploads');
+    if (!fs.existsSync(uploadDir)) {
+      fs.mkdirSync(uploadDir);
+    }
+    cb(null, uploadDir);
+  },
+  filename: (req, file, cb) => {
+    const uniqueName = `${Date.now()}-${file.originalname}`;
+    cb(null, uniqueName);
+  },
+});
+
+const upload = multer({ storage });
+
+// Endpoint per il caricamento dei file
+// Endpoint per il caricamento dei file
+app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
+
+// Endpoint per il caricamento dei file
+app.post('/api/upload', upload.single('file'), (req: Request, res: Response): void => {
   try {
-    const users = await prisma.user.findMany({
-      select: {
-        id: true,
-        username: true,
-      },
-    });
-    return void res.json(users);
+    if (!req.file) {
+      res.status(400).json({ message: 'No file uploaded' });
+      return;
+    }
+    
+    // Crea l'URL completo per il file
+    const fileUrl = `${req.protocol}://${req.get('host')}/uploads/${req.file.filename}`;
+    res.json({ fileUrl });
   } catch (error) {
-    console.error('Errore durante il recupero degli utenti online:', error);
-    return void res.status(500).json({ message: 'Internal Server Error' });
+    console.error('Errore durante il caricamento del file:', error);
+    res.status(500).json({ message: 'Internal Server Error' });
   }
 });
 
@@ -182,21 +193,6 @@ try {
     app
   );
 
-  
-  app.post('/api/upload', upload.single('file'), (req: Request, res: Response): void => {
-    try {
-      if (!req.file) {
-        res.status(400).json({ message: 'No file uploaded' });
-        return;
-      }
-      const fileUrl = `/uploads/${req.file.filename}`; // URL relativo del file
-      res.json({ fileUrl });
-    } catch (error) {
-      console.error('Errore durante il caricamento del file:', error);
-      res.status(500).json({ message: 'Internal Server Error' });
-    }
-  });
-
   // Crea server WebSocket
   const wss = new WebSocketServer({ server });
 
@@ -206,7 +202,6 @@ try {
   // Funzione per inviare la lista degli utenti online a tutti i client
   const sendOnlineUsers = () => {
     const onlineUsersList = Array.from(onlineUsers.values());
-    console.log('Invio lista utenti online:', onlineUsersList);
     wss.clients.forEach((client) => {
       const clientWs = client as ExtendedWebSocket;
       if (clientWs.readyState === WebSocket.OPEN) {
@@ -224,58 +219,42 @@ try {
       // Estrai il token dall'URL
       const url = req.url ? new URL(req.url, `https://${req.headers.host}`) : null;
       const token = url?.searchParams.get('token');
-
       if (!token) {
-        console.log('Connessione rifiutata: token mancante');
         ws.close(4001, 'Unauthorized: Missing token');
         return;
       }
 
       let userId: number;
-      let username: string;
-      
       try {
         const decoded = jwt.verify(token, process.env.JWT_SECRET || 'secret') as { userId: number };
         userId = decoded.userId;
-        
+        extWs.userId = userId;
+
         // Ottieni le informazioni dell'utente dal database
         const user = await prisma.user.findUnique({
           where: { id: userId },
           select: { id: true, username: true },
         });
-
         if (!user) {
-          console.log('Utente non trovato:', userId);
           ws.close(4001, 'User not found');
           return;
         }
-
-        username = user.username;
-        extWs.userId = userId;
-        extWs.username = username;
-        
-        // RIMOZIONE RIGA PROBLEMATICA
-        // extWs.url = req.url || '';
+        extWs.username = user.username;
 
         // Aggiungi l'utente alla mappa degli utenti online
-        onlineUsers.set(userId, { userId, username });
-        console.log(`Utente connesso: ${username} (${userId})`);
-        console.log('Utenti online:', Array.from(onlineUsers.values()));
-        
+        onlineUsers.set(userId, { userId: user.id, username: user.username });
       } catch (error) {
-        console.log('Token non valido:', error);
         ws.close(4001, 'Unauthorized: Invalid token');
         return;
       }
 
-      // Invia immediatamente la lista degli utenti online a questo client
+      // Invia la lista degli utenti online
+      const onlineUsersList = Array.from(onlineUsers.values());
       if (extWs.readyState === WebSocket.OPEN) {
-        const onlineUsersList = Array.from(onlineUsers.values());
         extWs.send(JSON.stringify({ type: 'online_users', data: onlineUsersList }));
-        console.log('Lista utenti online inviata al nuovo client:', onlineUsersList);
       }
-      
-      // Invia la notifica a tutti gli altri client che un nuovo utente è online
+
+      // Notifica agli altri utenti che questo utente è online
       wss.clients.forEach((client) => {
         const clientWs = client as ExtendedWebSocket;
         if (clientWs !== extWs && clientWs.readyState === WebSocket.OPEN) {
@@ -284,37 +263,19 @@ try {
               type: 'user_online',
               data: {
                 userId: userId,
-                username: username,
+                username: extWs.username,
               },
             })
           );
         }
       });
-      
-      // Invia i messaggi globali precedenti
-      const messages = await prisma.message.findMany({
-        where: {
-          receiverId: null,
-        },
-        include: {
-          sender: true,
-        },
-        orderBy: { createdAt: 'asc' },
-      });
-
-      if (extWs.readyState === WebSocket.OPEN) {
-        extWs.send(JSON.stringify({ type: 'messages', data: messages }));
-        console.log(`Inviati ${messages.length} messaggi globali al client`);
-      }
 
       // Gestisci i messaggi ricevuti
       extWs.on('message', async (message) => {
         try {
           const parsedMessage = JSON.parse(message.toString());
-          console.log('Messaggio ricevuto:', parsedMessage);
-
           if (parsedMessage.type === 'chat_message') {
-            const { content, receiverId } = parsedMessage;
+            const { content, receiverId, fileUrl } = parsedMessage;
 
             // Salva il messaggio nel database
             const savedMessage = await prisma.message.create({
@@ -322,6 +283,7 @@ try {
                 content,
                 senderId: userId,
                 receiverId: receiverId || null,
+                fileUrl: fileUrl || null,
               },
               include: {
                 sender: true,
@@ -329,11 +291,8 @@ try {
               },
             });
 
-            console.log('Messaggio salvato:', savedMessage);
-
             // Invia il messaggio a tutti i client se è un messaggio globale
             if (receiverId === null) {
-              console.log('Invio messaggio globale a tutti i client');
               wss.clients.forEach((client) => {
                 if (client.readyState === WebSocket.OPEN) {
                   client.send(JSON.stringify({ type: 'new_message', data: savedMessage }));
@@ -346,15 +305,12 @@ try {
               }
 
               // Invia il messaggio al destinatario specifico
-              let destinatarioTrovato = false;
               wss.clients.forEach((client) => {
                 const clientWs = client as ExtendedWebSocket;
                 if (clientWs.readyState === WebSocket.OPEN && clientWs !== extWs && clientWs.userId === receiverId) {
                   clientWs.send(JSON.stringify({ type: 'new_message', data: savedMessage }));
-                  destinatarioTrovato = true;
                 }
               });
-              console.log(`Destinatario ${receiverId} ${destinatarioTrovato ? 'trovato' : 'non trovato'}`);
             }
           }
         } catch (error) {
@@ -364,13 +320,8 @@ try {
 
       // Gestisci la disconnessione
       extWs.on('close', () => {
-        console.log(`Utente disconnesso: ${username} (${userId})`);
-        
         // Rimuovi l'utente dalla mappa degli utenti online
         onlineUsers.delete(userId);
-        
-        // Invia la lista aggiornata degli utenti online a tutti i client
-        sendOnlineUsers();
 
         // Notifica agli altri utenti che questo utente è offline
         wss.clients.forEach((client) => {

@@ -1,63 +1,25 @@
 document.addEventListener("DOMContentLoaded", () => {
-    // Elementi DOM
+    // Elementi DOM principali
     const authScreen = document.getElementById("auth-screen");
     const loginForm = document.getElementById("login-form");
     const registerForm = document.getElementById("register-form");
     const chatScreen = document.getElementById("chat-screen");
-
     const loginEmail = document.getElementById("login-email");
     const loginPassword = document.getElementById("login-password");
     const loginButton = document.getElementById("login-button");
-
     const registerEmail = document.getElementById("register-email");
     const registerPassword = document.getElementById("register-password");
     const registerUsername = document.getElementById("register-username");
     const registerButton = document.getElementById("register-button");
-
     const switchToRegister = document.getElementById("switch-to-register");
     const switchToLogin = document.getElementById("switch-to-login");
 
-    document.getElementById('upload-button').addEventListener('click', async () => {
-        const fileInput = document.getElementById('file-input');
-        const file = fileInput.files[0];
-        if (!file) {
-          alert('Seleziona un file prima di caricarlo.');
-          return;
-        }
-      
-        const formData = new FormData();
-        formData.append('file', file);
-      
-        try {
-          const response = await fetch('/api/upload', {
-            method: 'POST',
-            body: formData,
-          });
-          const data = await response.json();
-          if (response.ok) {
-            alert('File caricato con successo!');
-            sendMessageWithFile(data.fileUrl); // Invia il messaggio con il file
-          } else {
-            alert('Errore durante il caricamento del file.');
-          }
-        } catch (error) {
-          console.error('Errore durante il caricamento del file:', error);
-        }
-      });
-      
-      function sendMessageWithFile(fileUrl) {
-        const message = {
-          type: 'chat_message',
-          content: '', // Puoi lasciare vuoto o aggiungere un testo opzionale
-          receiverId: currentRecipientId,
-          fileUrl: fileUrl,
-        };
-        socket.send(JSON.stringify(message));
-      }
-
+    // Variabili globali
     let token = null;
     let socket = null;
     let userId = null;
+    let currentRecipientId = null;
+    let unreadMessagesCount = {}; // Contiene il numero di messaggi non letti per ogni utente
 
     // Cambia tra login e registrazione
     switchToRegister.addEventListener("click", (e) => {
@@ -142,7 +104,7 @@ document.addEventListener("DOMContentLoaded", () => {
         authScreen.style.display = "none"; // Nascondi la schermata di login/registrazione
         chatScreen.style.display = "flex"; // Mostra la schermata della chat
 
-        // Crea una connessione WebSocket (URL corretto senza /chat)
+        // Crea una connessione WebSocket
         socket = new WebSocket(`wss://localhost:3000?token=${token}`);
 
         // Elementi DOM della chat
@@ -150,8 +112,8 @@ document.addEventListener("DOMContentLoaded", () => {
         const onlineUsersList = document.getElementById("online-users");
         const messageInput = document.getElementById("message-input");
         const sendButton = document.getElementById("send-button");
-
-        let currentRecipientId = null;
+        const fileInput = document.getElementById("file-input");
+        const uploadButton = document.getElementById("upload-button");
 
         // Gestisci la connessione WebSocket
         socket.onopen = () => {
@@ -159,11 +121,9 @@ document.addEventListener("DOMContentLoaded", () => {
         };
 
         socket.onmessage = (event) => {
-            console.log("Messaggio ricevuto:", event.data); // Debug
             const data = JSON.parse(event.data);
-        
+
             if (data.type === "online_users") {
-                console.log("Utenti online ricevuti:", data.data); // Debug
                 updateOnlineUsers(data.data);
             } else if (data.type === "user_online") {
                 addUserOnline(data.data);
@@ -172,8 +132,7 @@ document.addEventListener("DOMContentLoaded", () => {
             } else if (data.type === "new_message") {
                 addMessage(data.data);
             } else if (data.type === "messages") {
-                // Mostra i messaggi globali precedenti
-                data.data.forEach(message => addMessage(message));
+                data.data.forEach((message) => addMessage(message));
             }
         };
 
@@ -185,140 +144,162 @@ document.addEventListener("DOMContentLoaded", () => {
             console.log("Connessione WebSocket chiusa");
         };
 
-        // Funzioni per gestire gli utenti online e i messaggi
+        // Aggiorna la lista degli utenti online
         function updateOnlineUsers(users) {
             onlineUsersList.innerHTML = "";
-            
+
             // Aggiungi opzione per chat globale
             const globalChat = document.createElement("li");
             globalChat.textContent = "Chat Globale";
             globalChat.classList.add("global-chat");
             globalChat.addEventListener("click", () => {
                 currentRecipientId = null;
-                // Rimuovi la classe "active" da tutti gli utenti
+                resetUnreadCount(null); // Resetta il contatore per la chat globale
                 Array.from(onlineUsersList.children).forEach((li) => li.classList.remove("active"));
                 globalChat.classList.add("active");
-                messagesContainer.innerHTML = ""; // Pulisci la chat
-                
-                // Carica messaggi globali
-                fetch("https://localhost:3000/api/messages", {
-                    method: "GET",
-                    headers: {
-                        Authorization: `Bearer ${token}`,
-                    },
-                })
-                .then(response => {
-                    if (response.ok) return response.json();
-                    throw new Error("Errore nel caricamento dei messaggi globali");
-                })
-                .then(messages => {
-                    messagesContainer.innerHTML = "";
-                    messages.forEach(message => addMessage(message));
-                })
-                .catch(error => {
-                    console.error("Errore:", error);
-                });
+                messagesContainer.innerHTML = "";
+                loadPreviousMessages(null);
             });
             onlineUsersList.appendChild(globalChat);
-            
-            // Inizialmente seleziona la chat globale
-            if (users.length > 0 && !currentRecipientId) {
-                globalChat.click();
-            }
-            
+
             // Aggiungi gli utenti online (escluso l'utente corrente)
             users.forEach((user) => {
-                // Non mostrare l'utente corrente nella lista
                 if (user.userId === userId) return;
-                
+
                 const li = document.createElement("li");
                 li.textContent = user.username;
-                li.dataset.userId = user.userId; // Usa userId invece di id
-                li.addEventListener("click", () => selectRecipient(user.userId));
+                li.dataset.userId = user.userId;
+
+                // Aggiungi un elemento per mostrare i messaggi non letti
+                const unreadBadge = document.createElement("span");
+                unreadBadge.classList.add("unread-badge");
+                unreadBadge.style.display = "none"; // Nascondi inizialmente
+                li.appendChild(unreadBadge);
+
+                li.addEventListener("click", () => {
+                    selectRecipient(user.userId);
+                    resetUnreadCount(user.userId); // Resetta il contatore quando si seleziona l'utente
+                });
+
                 onlineUsersList.appendChild(li);
             });
+
+            // Seleziona automaticamente la chat globale
+            if (!currentRecipientId) {
+                globalChat.click();
+            }
         }
 
+        // Aggiungi un utente online
         function addUserOnline(user) {
-            // Evita di aggiungere l'utente corrente
             if (user.userId === userId) return;
-            
-            // Evita duplicati
-            if (Array.from(onlineUsersList.children).some(li => li.dataset.userId === user.userId.toString())) return;
-            
+
+            if (Array.from(onlineUsersList.children).some((li) => li.dataset.userId === user.userId.toString())) return;
+
             const li = document.createElement("li");
             li.textContent = user.username;
             li.dataset.userId = user.userId;
-            li.addEventListener("click", () => selectRecipient(user.userId));
+
+            // Aggiungi un elemento per mostrare i messaggi non letti
+            const unreadBadge = document.createElement("span");
+            unreadBadge.classList.add("unread-badge");
+            unreadBadge.style.display = "none"; // Nascondi inizialmente
+            li.appendChild(unreadBadge);
+
+            li.addEventListener("click", () => {
+                selectRecipient(user.userId);
+                resetUnreadCount(user.userId); // Resetta il contatore quando si seleziona l'utente
+            });
+
             onlineUsersList.appendChild(li);
         }
 
-        function removeUserOffline(userId) {
+        // Rimuovi un utente offline
+        function removeUserOffline(userIdToRemove) {
             const userToRemove = Array.from(onlineUsersList.children).find(
-                (li) => li.dataset.userId === userId.toString()
+                (li) => li.dataset.userId === userIdToRemove.toString()
             );
+
             if (userToRemove) {
                 onlineUsersList.removeChild(userToRemove);
             }
         }
 
+        // Aggiungi un messaggio alla chat
         function addMessage(message) {
             const div = document.createElement("div");
             div.className = "message";
 
-            // Determina se il messaggio è inviato o ricevuto
             if (message.senderId === userId) {
                 div.classList.add("sent");
             } else {
                 div.classList.add("received");
+
+                // Aggiorna il contatore dei messaggi non letti se il mittente non è selezionato
+                if (message.senderId !== currentRecipientId) {
+                    updateUnreadCount(message.senderId);
+                }
             }
 
-            // Mostra il mittente e il contenuto del messaggio
             div.innerHTML = `
-                <strong>${message.sender.username}:</strong> ${message.content}
+                <strong>${message.sender.username}:</strong> ${message.content || ""}
+                ${message.fileUrl ? `<a href="${message.fileUrl}" target="_blank">Scarica file</a>` : ""}
                 <small>${new Date(message.createdAt).toLocaleTimeString()}</small>
             `;
+
             messagesContainer.appendChild(div);
-            messagesContainer.scrollTop = messagesContainer.scrollHeight; // Scorri verso il basso
-        }
-        function addMessage(message) {
-            const messagesContainer = document.getElementById('messages');
-            const messageElement = document.createElement('div');
-            messageElement.classList.add('message');
-          
-            if (message.content) {
-              messageElement.innerHTML += `<p>${message.content}</p>`;
-            }
-            if (message.fileUrl) {
-              const fileExtension = message.fileUrl.split('.').pop().toLowerCase();
-              if (['jpg', 'jpeg', 'png', 'gif'].includes(fileExtension)) {
-                messageElement.innerHTML += `<img src="${message.fileUrl}" alt="Immagine condivisa" style="max-width: 200px;" />`;
-              } else {
-                messageElement.innerHTML += `<a href="${message.fileUrl}" target="_blank">Scarica file</a>`;
-              }
-            }
-          
-            messagesContainer.appendChild(messageElement);
             messagesContainer.scrollTop = messagesContainer.scrollHeight;
-          }
+        }
+
+        // Aggiorna il contatore dei messaggi non letti
+        function updateUnreadCount(userId) {
+            if (!userId) return;
+
+            unreadMessagesCount[userId] = (unreadMessagesCount[userId] || 0) + 1;
+
+            const userLi = Array.from(onlineUsersList.children).find(
+                (li) => li.dataset.userId === userId.toString()
+            );
+
+            if (userLi) {
+                const unreadBadge = userLi.querySelector(".unread-badge");
+                unreadBadge.textContent = unreadMessagesCount[userId];
+                unreadBadge.style.display = "inline"; // Mostra il badge
+            }
+        }
+
+        // Resetta il contatore dei messaggi non letti
+        function resetUnreadCount(userId) {
+            if (!userId) return;
+
+            unreadMessagesCount[userId] = 0;
+
+            const userLi = Array.from(onlineUsersList.children).find(
+                (li) => li.dataset.userId === userId.toString()
+            );
+
+            if (userLi) {
+                const unreadBadge = userLi.querySelector(".unread-badge");
+                unreadBadge.textContent = "";
+                unreadBadge.style.display = "none"; // Nascondi il badge
+            }
+        }
 
         // Seleziona un destinatario
         function selectRecipient(recipientId) {
             currentRecipientId = recipientId;
-
-            // Rimuovi la classe "active" da tutti gli utenti
             Array.from(onlineUsersList.children).forEach((li) => li.classList.remove("active"));
 
-            // Aggiungi la classe "active" all'utente selezionato
             const selectedUser = Array.from(onlineUsersList.children).find(
                 (li) => li.dataset.userId === recipientId.toString()
             );
+
             if (selectedUser) {
                 selectedUser.classList.add("active");
             }
 
-            messagesContainer.innerHTML = ""; // Pulisci la chat
-            loadPreviousMessages(recipientId); // Carica i messaggi precedenti
+            messagesContainer.innerHTML = "";
+            loadPreviousMessages(recipientId);
         }
 
         // Carica i messaggi precedenti
@@ -339,37 +320,80 @@ document.addEventListener("DOMContentLoaded", () => {
                 }
 
                 const messages = await response.json();
-                messagesContainer.innerHTML = ""; // Pulisci i messaggi prima di aggiungerli
+                messagesContainer.innerHTML = "";
                 messages.forEach((message) => addMessage(message));
             } catch (error) {
                 console.error("Errore durante il caricamento dei messaggi precedenti:", error);
             }
         }
 
-        // Invia un messaggio quando si preme il pulsante "Invia"
+        // Invia un messaggio
         sendButton.addEventListener("click", () => {
             const content = messageInput.value.trim();
+
             if (!content) {
                 alert("Scrivi un messaggio");
                 return;
             }
-        
+
             const message = {
                 type: "chat_message",
                 content: content,
-                receiverId: currentRecipientId  // Può essere null per la chat globale
+                receiverId: currentRecipientId,
             };
-            
-            console.log("Invio messaggio:", message); // Debug
+
             socket.send(JSON.stringify(message));
-            messageInput.value = ""; // Pulisci l'input
+            messageInput.value = "";
         });
 
-        // Invia un messaggio anche premendo "Enter"
+        // Invia un messaggio premendo "Enter"
         messageInput.addEventListener("keypress", (event) => {
             if (event.key === "Enter") {
                 sendButton.click();
             }
         });
+
+        // Gestisci il caricamento dei file
+        uploadButton.addEventListener("click", async () => {
+            const file = fileInput.files[0];
+
+            if (!file) {
+                alert("Seleziona un file prima di caricarlo.");
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append("file", file);
+
+            try {
+                const response = await fetch("/api/upload", {
+                    method: "POST",
+                    body: formData,
+                });
+
+                if (!response.ok) {
+                    alert("Errore durante il caricamento del file.");
+                    return;
+                }
+
+                const data = await response.json();
+                alert("File caricato con successo!");
+                sendMessageWithFile(data.fileUrl);
+            } catch (error) {
+                console.error("Errore durante il caricamento del file:", error);
+            }
+        });
+
+        // Invia un messaggio con un file
+        function sendMessageWithFile(fileUrl) {
+            const message = {
+                type: "chat_message",
+                content: "", // Puoi lasciare vuoto o aggiungere un testo opzionale
+                receiverId: currentRecipientId,
+                fileUrl: fileUrl,
+            };
+
+            socket.send(JSON.stringify(message));
+        }
     }
 });

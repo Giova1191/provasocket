@@ -32,6 +32,7 @@ model Message {
   senderId   Int
   receiverId Int? // ID del destinatario (opzionale per supportare chat di gruppo in futuro)
   fileUrl     String?
+  fileSize Int?
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
