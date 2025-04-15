@@ -5,6 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Chat App</title>
     <link rel="stylesheet" href="index.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <script src="calls.js"></script>
+    <script src="index.js"></script>
 </head>
 <body>
     <!-- Schermata di login/registrazione -->
@@ -45,12 +48,23 @@
             <div class="file-upload">
                 <input type="file" id="file-input" />
                 <button id="upload-button">Condividi File</button>
-              </div>
-
+            </div>
+            <div class="call-controls">
+                <button id="start-video-call" class="call-button" title="Avvia videochiamata">
+                    <i class="fas fa-video"></i>
+                </button>
+                <button id="start-audio-call" class="call-button" title="Avvia chiamata audio">
+                    <i class="fas fa-phone"></i>
+                </button>
+                <button id="end-call" class="call-button" title="Termina chiamata" style="display: none;">
+                    <i class="fas fa-phone-slash"></i>
+                </button>
+            </div>
+            <div id="video-container" class="video-container" style="display: none;">
+                <video id="local-video" autoplay muted></video>
+                <video id="remote-video" autoplay></video>
             </div>
         </div>
     </div>
-
-    <script src="index.js"></script>
 </body>
 </html>

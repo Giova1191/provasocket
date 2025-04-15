@@ -21,6 +21,21 @@ document.addEventListener("DOMContentLoaded", () => {
     let currentRecipientId = null;
     let unreadMessagesCount = {}; // Contiene il numero di messaggi non letti per ogni utente
 
+    // Variabili per la gestione delle chiamate
+    let peerConnection = null;
+    let localStream = null;
+    let isCallActive = false;
+    const startCallButton = document.getElementById('start-audio-call');
+    const endCallButton = document.getElementById('end-call');
+
+    // Configurazione WebRTC
+    const configuration = {
+        iceServers: [
+            { urls: 'stun:stun.l.google.com:19302' },
+            { urls: 'stun:stun1.l.google.com:19302' }
+        ]
+    };
+
     // Cambia tra login e registrazione
     switchToRegister.addEventListener("click", (e) => {
         e.preventDefault();
@@ -57,9 +72,9 @@ document.addEventListener("DOMContentLoaded", () => {
             }
 
             const data = await response.json();
-            token = data.token; // Salva il token JWT
-            userId = data.user.id; // Salva l'ID utente
-            startChat(); // Avvia la chat
+            token = data.token;
+            userId = data.user.id;
+            startChat();
         } catch (error) {
             console.error("Errore durante il login:", error);
             alert("Errore durante il login");
@@ -101,11 +116,14 @@ document.addEventListener("DOMContentLoaded", () => {
 
     // Funzione per avviare la chat
     function startChat() {
-        authScreen.style.display = "none"; // Nascondi la schermata di login/registrazione
-        chatScreen.style.display = "flex"; // Mostra la schermata della chat
+        authScreen.style.display = "none";
+        chatScreen.style.display = "flex";
 
         // Crea una connessione WebSocket
         socket = new WebSocket(`wss://localhost:3000?token=${token}`);
+
+        // Inizializza i pulsanti delle chiamate
+        initializeCallButtons();
 
         // Elementi DOM della chat
         const messagesContainer = document.getElementById("messages");
@@ -120,19 +138,38 @@ document.addEventListener("DOMContentLoaded", () => {
             console.log("Connessione WebSocket stabilita");
         };
 
-        socket.onmessage = (event) => {
-            const data = JSON.parse(event.data);
-
-            if (data.type === "online_users") {
-                updateOnlineUsers(data.data);
-            } else if (data.type === "user_online") {
-                addUserOnline(data.data);
-            } else if (data.type === "user_offline") {
-                removeUserOffline(data.data.userId);
-            } else if (data.type === "new_message") {
-                addMessage(data.data);
-            } else if (data.type === "messages") {
-                data.data.forEach((message) => addMessage(message));
+        socket.onmessage = async (event) => {
+            try {
+                const data = JSON.parse(event.data);
+                console.log('Ricevuto messaggio:', data.type, 'da:', data.senderId, 'a:', data.recipientId);
+                
+                // Verifica che il messaggio di chiamata sia destinato a noi
+                if (['call_offer', 'call_answer', 'ice_candidate', 'call_end', 'call_reject'].includes(data.type)) {
+                    if (data.recipientId === userId || data.senderId === userId) {
+                        console.log('Gestisco messaggio di chiamata:', data);
+                        await handleCallMessage(data);
+                    } else {
+                        console.log('Ignoro messaggio di chiamata non destinato a me');
+                    }
+                    return;
+                }
+                
+                switch(data.type) {
+                    case 'online_users':
+                        updateOnlineUsers(data.data);
+                        break;
+                    case 'user_online':
+                        addUserOnline(data.data);
+                        break;
+                    case 'user_offline':
+                        removeUserOffline(data.data.userId);
+                        break;
+                    case 'new_message':
+                        addMessage(data.data);
+                        break;
+                }
+            } catch (error) {
+                console.error('Errore nella gestione del messaggio WebSocket:', error);
             }
         };
 
@@ -154,7 +191,7 @@ document.addEventListener("DOMContentLoaded", () => {
             globalChat.classList.add("global-chat");
             globalChat.addEventListener("click", () => {
                 currentRecipientId = null;
-                resetUnreadCount(null); // Resetta il contatore per la chat globale
+                resetUnreadCount(null);
                 Array.from(onlineUsersList.children).forEach((li) => li.classList.remove("active"));
                 globalChat.classList.add("active");
                 messagesContainer.innerHTML = "";
@@ -173,19 +210,20 @@ document.addEventListener("DOMContentLoaded", () => {
                 // Aggiungi un elemento per mostrare i messaggi non letti
                 const unreadBadge = document.createElement("span");
                 unreadBadge.classList.add("unread-badge");
-                unreadBadge.style.display = "none"; // Nascondi inizialmente
+                unreadBadge.style.display = "none";
                 li.appendChild(unreadBadge);
 
                 li.addEventListener("click", () => {
                     selectRecipient(user.userId);
-                    resetUnreadCount(user.userId); // Resetta il contatore quando si seleziona l'utente
+                    resetUnreadCount(user.userId);
                 });
 
                 onlineUsersList.appendChild(li);
             });
 
-            // Seleziona automaticamente la chat globale
-            if (!currentRecipientId) {
+            // Se il destinatario corrente non è più online, resetta lo stato
+            if (currentRecipientId && !users.some(user => user.userId === currentRecipientId)) {
+                currentRecipientId = null;
                 globalChat.click();
             }
         }
@@ -203,12 +241,12 @@ document.addEventListener("DOMContentLoaded", () => {
             // Aggiungi un elemento per mostrare i messaggi non letti
             const unreadBadge = document.createElement("span");
             unreadBadge.classList.add("unread-badge");
-            unreadBadge.style.display = "none"; // Nascondi inizialmente
+            unreadBadge.style.display = "none";
             li.appendChild(unreadBadge);
 
             li.addEventListener("click", () => {
                 selectRecipient(user.userId);
-                resetUnreadCount(user.userId); // Resetta il contatore quando si seleziona l'utente
+                resetUnreadCount(user.userId);
             });
 
             onlineUsersList.appendChild(li);
@@ -264,7 +302,7 @@ document.addEventListener("DOMContentLoaded", () => {
             if (userLi) {
                 const unreadBadge = userLi.querySelector(".unread-badge");
                 unreadBadge.textContent = unreadMessagesCount[userId];
-                unreadBadge.style.display = "inline"; // Mostra il badge
+                unreadBadge.style.display = "inline";
             }
         }
 
@@ -281,25 +319,31 @@ document.addEventListener("DOMContentLoaded", () => {
             if (userLi) {
                 const unreadBadge = userLi.querySelector(".unread-badge");
                 unreadBadge.textContent = "";
-                unreadBadge.style.display = "none"; // Nascondi il badge
+                unreadBadge.style.display = "none";
             }
         }
 
         // Seleziona un destinatario
         function selectRecipient(recipientId) {
+            console.log('Selezionato destinatario:', recipientId);
             currentRecipientId = recipientId;
-            Array.from(onlineUsersList.children).forEach((li) => li.classList.remove("active"));
-
-            const selectedUser = Array.from(onlineUsersList.children).find(
-                (li) => li.dataset.userId === recipientId.toString()
-            );
-
-            if (selectedUser) {
-                selectedUser.classList.add("active");
-            }
+            
+            Array.from(onlineUsersList.children).forEach((li) => {
+                if (li.dataset.userId === recipientId.toString()) {
+                    li.classList.add("active");
+                    // Aggiorniamo il titolo del pulsante di chiamata con il nome dell'utente
+                    if (startCallButton) {
+                        const username = li.textContent.trim();
+                        startCallButton.title = `Chiama ${username}`;
+                    }
+                } else {
+                    li.classList.remove("active");
+                }
+            });
 
             messagesContainer.innerHTML = "";
             loadPreviousMessages(recipientId);
+            updateCallUI(); // Aggiorniamo l'UI delle chiamate quando selezioniamo un utente
         }
 
         // Carica i messaggi precedenti
@@ -388,12 +432,341 @@ document.addEventListener("DOMContentLoaded", () => {
         function sendMessageWithFile(fileUrl) {
             const message = {
                 type: "chat_message",
-                content: "", // Puoi lasciare vuoto o aggiungere un testo opzionale
+                content: "",
                 receiverId: currentRecipientId,
                 fileUrl: fileUrl,
             };
 
             socket.send(JSON.stringify(message));
+        }
+    }
+
+    // Funzioni per la gestione delle chiamate
+    function initializeCallButtons() {
+        if (startCallButton) {
+            startCallButton.onclick = startCall;
+            console.log('Pulsante chiamata inizializzato');
+        }
+        if (endCallButton) {
+            endCallButton.onclick = endCall;
+            console.log('Pulsante fine chiamata inizializzato');
+        }
+    }
+
+    async function startCall() {
+        try {
+            console.log('=== INIZIO AVVIO CHIAMATA ===');
+            console.log('ID utente corrente:', userId);
+            console.log('Destinatario:', currentRecipientId);
+            
+            if (!currentRecipientId) {
+                console.log('Nessun destinatario selezionato');
+                alert('Seleziona un utente prima di iniziare una chiamata');
+                return;
+            }
+
+            if (isCallActive) {
+                console.log('Chiamata già attiva');
+                alert('C\'è già una chiamata attiva');
+                return;
+            }
+
+            // Troviamo il nome dell'utente chiamato
+            const recipientLi = Array.from(document.querySelectorAll('#online-users li')).find(
+                li => li.dataset.userId === currentRecipientId.toString()
+            );
+            const recipientName = recipientLi ? recipientLi.textContent.trim() : 'utente';
+            
+            // Mostriamo un feedback visivo che stiamo chiamando
+            if (startCallButton) {
+                startCallButton.title = `Chiamata in corso con ${recipientName}...`;
+            }
+
+            console.log('Richiedo permessi audio...');
+            localStream = await navigator.mediaDevices.getUserMedia({
+                audio: true,
+                video: false
+            });
+            console.log('Permessi audio ottenuti');
+
+            createPeerConnection();
+
+            localStream.getTracks().forEach(track => {
+                console.log('Aggiungo traccia audio:', track.kind);
+                peerConnection.addTrack(track, localStream);
+            });
+
+            console.log('Creo offerta...');
+            const offer = await peerConnection.createOffer();
+            await peerConnection.setLocalDescription(offer);
+
+            // Troviamo il nome utente del chiamante
+            const userLi = Array.from(document.querySelectorAll('#online-users li')).find(
+                li => li.dataset.userId === userId.toString()
+            );
+            const senderUsername = userLi ? userLi.textContent.trim() : 'Chiamante';
+
+            const callMessage = {
+                type: 'call_offer',
+                recipientId: currentRecipientId,
+                senderId: userId,
+                offer: offer,
+                senderUsername: senderUsername
+            };
+
+            console.log('Invio offerta al destinatario:', callMessage);
+            socket.send(JSON.stringify(callMessage));
+
+            isCallActive = true;
+            updateCallUI();
+            console.log('=== FINE AVVIO CHIAMATA ===');
+
+        } catch (error) {
+            console.error('Errore durante l\'avvio della chiamata:', error);
+            cleanupCall();
+            alert('Errore durante l\'avvio della chiamata: ' + error.message);
+        }
+    }
+
+    function createPeerConnection() {
+        console.log('Creo connessione peer');
+        peerConnection = new RTCPeerConnection(configuration);
+
+        peerConnection.onicecandidate = event => {
+            if (event.candidate) {
+                console.log('Nuovo candidato ICE trovato');
+                socket.send(JSON.stringify({
+                    type: 'ice_candidate',
+                    recipientId: currentRecipientId,
+                    candidate: event.candidate
+                }));
+            }
+        };
+
+        peerConnection.ontrack = event => {
+            console.log('Ricevuta traccia audio remota');
+            const audio = new Audio();
+            audio.srcObject = event.streams[0];
+            audio.play().catch(e => console.error('Errore riproduzione audio:', e));
+        };
+
+        peerConnection.oniceconnectionstatechange = () => {
+            console.log('Stato connessione ICE:', peerConnection.iceConnectionState);
+            if (peerConnection.iceConnectionState === 'failed' || 
+                peerConnection.iceConnectionState === 'closed') {
+                endCall();
+            }
+        };
+    }
+
+    function endCall() {
+        console.log('Termino la chiamata');
+        cleanupCall();
+        
+        if (currentRecipientId) {
+            socket.send(JSON.stringify({
+                type: 'call_end',
+                recipientId: currentRecipientId
+            }));
+        }
+    }
+
+    function cleanupCall() {
+        console.log('Pulisco lo stato della chiamata');
+        if (localStream) {
+            localStream.getTracks().forEach(track => {
+                track.stop();
+                console.log('Traccia audio fermata:', track.kind);
+            });
+            localStream = null;
+        }
+
+        if (peerConnection) {
+            peerConnection.close();
+            peerConnection = null;
+            console.log('Connessione peer chiusa');
+        }
+
+        isCallActive = false;
+        updateCallUI();
+    }
+
+    function updateCallUI() {
+        console.log('Aggiorno UI chiamata, stato attivo:', isCallActive);
+        if (startCallButton) {
+            startCallButton.style.display = isCallActive ? 'none' : 'inline-block';
+            // Aggiorniamo anche il titolo del pulsante per mostrare con chi stiamo chiamando
+            if (!isCallActive) {
+                startCallButton.title = currentRecipientId ? 'Chiama' : 'Seleziona un utente per chiamare';
+            }
+        }
+        if (endCallButton) {
+            endCallButton.style.display = isCallActive ? 'inline-block' : 'none';
+        }
+
+        // Aggiorniamo lo stato visivo del pulsante di chiamata
+        if (startCallButton) {
+            if (!currentRecipientId) {
+                startCallButton.disabled = true;
+                startCallButton.style.opacity = '0.5';
+            } else {
+                startCallButton.disabled = false;
+                startCallButton.style.opacity = '1';
+            }
+        }
+    }
+
+    async function handleCallMessage(data) {
+        try {
+            console.log('=== INIZIO GESTIONE MESSAGGIO CHIAMATA ===');
+            console.log('Tipo messaggio:', data.type);
+            console.log('Mittente:', data.senderId);
+            console.log('Destinatario:', data.recipientId);
+            console.log('Dati completi:', data);
+            
+            // Verifica che il messaggio sia destinato a noi
+            if (data.recipientId !== userId && data.senderId !== userId) {
+                console.log('Messaggio non destinato a questo utente, ignoro');
+                return;
+            }
+
+            switch(data.type) {
+                case 'call_offer':
+                    if (data.recipientId === userId) {
+                        console.log('Ricevuta offerta di chiamata da:', data.senderId);
+                        await handleCallOffer(data);
+                    }
+                    break;
+                case 'call_answer':
+                    if (data.recipientId === userId) {
+                        console.log('Ricevuta risposta alla chiamata da:', data.senderId);
+                        await handleCallAnswer(data);
+                    }
+                    break;
+                case 'ice_candidate':
+                    if (data.recipientId === userId) {
+                        console.log('Ricevuto candidato ICE da:', data.senderId);
+                        await handleIceCandidate(data);
+                    }
+                    break;
+                case 'call_end':
+                    if (data.recipientId === userId) {
+                        console.log('Ricevuta richiesta di fine chiamata da:', data.senderId);
+                        cleanupCall();
+                    }
+                    break;
+                case 'call_reject':
+                    if (data.recipientId === userId) {
+                        console.log('Ricevuto rifiuto della chiamata da:', data.senderId);
+                        cleanupCall();
+                        alert('Chiamata rifiutata');
+                    }
+                    break;
+            }
+            console.log('=== FINE GESTIONE MESSAGGIO CHIAMATA ===');
+        } catch (error) {
+            console.error('Errore nella gestione del messaggio di chiamata:', error);
+        }
+    }
+
+    async function handleCallOffer(data) {
+        try {
+            console.log('=== INIZIO GESTIONE OFFERTA ===');
+            console.log('ID utente corrente:', userId);
+            console.log('Dati offerta:', data);
+            
+            if (data.recipientId !== userId) {
+                console.log('Offerta non destinata a questo utente, ignoro');
+                return;
+            }
+
+            if (isCallActive) {
+                console.log('Chiamata già attiva, rifiuto la nuova chiamata');
+                socket.send(JSON.stringify({
+                    type: 'call_reject',
+                    recipientId: data.senderId,
+                    senderId: userId
+                }));
+                return;
+            }
+
+            console.log('Mostro popup di conferma');
+            const accept = confirm(`${data.senderUsername || 'Qualcuno'} vuole chiamarti. Accetti?`);
+
+            if (!accept) {
+                console.log('Utente ha rifiutato la chiamata');
+                socket.send(JSON.stringify({
+                    type: 'call_reject',
+                    recipientId: data.senderId,
+                    senderId: userId
+                }));
+                return;
+            }
+
+            console.log('Utente ha accettato la chiamata');
+            console.log('Richiedo permessi audio...');
+            localStream = await navigator.mediaDevices.getUserMedia({
+                audio: true,
+                video: false
+            });
+            console.log('Permessi audio ottenuti');
+
+            createPeerConnection();
+
+            localStream.getTracks().forEach(track => {
+                console.log('Aggiungo traccia audio alla risposta:', track.kind);
+                peerConnection.addTrack(track, localStream);
+            });
+
+            console.log('Imposto descrizione remota');
+            await peerConnection.setRemoteDescription(new RTCSessionDescription(data.offer));
+            
+            console.log('Creo risposta');
+            const answer = await peerConnection.createAnswer();
+            await peerConnection.setLocalDescription(answer);
+
+            console.log('Invio risposta al chiamante');
+            socket.send(JSON.stringify({
+                type: 'call_answer',
+                recipientId: data.senderId,
+                senderId: userId,
+                answer: answer
+            }));
+
+            currentRecipientId = data.senderId;
+            isCallActive = true;
+            updateCallUI();
+            console.log('=== FINE GESTIONE OFFERTA ===');
+
+        } catch (error) {
+            console.error('Errore nella gestione dell\'offerta:', error);
+            cleanupCall();
+            alert('Errore durante l\'accettazione della chiamata: ' + error.message);
+        }
+    }
+
+    async function handleCallAnswer(data) {
+        try {
+            console.log('Gestisco risposta alla chiamata');
+            if (peerConnection) {
+                await peerConnection.setRemoteDescription(new RTCSessionDescription(data.answer));
+                console.log('Descrizione remota impostata con successo');
+            }
+        } catch (error) {
+            console.error('Errore nella gestione della risposta:', error);
+            cleanupCall();
+        }
+    }
+
+    async function handleIceCandidate(data) {
+        try {
+            console.log('Gestisco candidato ICE');
+            if (peerConnection && data.candidate) {
+                await peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate));
+                console.log('Candidato ICE aggiunto con successo');
+            }
+        } catch (error) {
+            console.error('Errore nell\'aggiunta del candidato ICE:', error);
         }
     }
 });

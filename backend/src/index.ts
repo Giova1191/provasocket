@@ -270,12 +270,15 @@ try {
         }
       });
 
-      // Gestisci i messaggi ricevuti
-      extWs.on('message', async (message) => {
+      // Gestisci i messaggi WebSocket
+      ws.on('message', async (message: string) => {
         try {
-          const parsedMessage = JSON.parse(message.toString());
-          if (parsedMessage.type === 'chat_message') {
-            const { content, receiverId, fileUrl } = parsedMessage;
+          const data = JSON.parse(message);
+          console.log('Ricevuto messaggio:', data.type);
+
+          // Gestisci i messaggi di chat esistenti
+          if (data.type === 'chat_message') {
+            const { content, receiverId, fileUrl } = data;
 
             // Salva il messaggio nel database
             const savedMessage = await prisma.message.create({
@@ -313,8 +316,39 @@ try {
               });
             }
           }
+
+          // Gestisci i messaggi WebRTC
+          if (['call_offer', 'call_answer', 'ice_candidate', 'call_end', 'call_reject'].includes(data.type)) {
+            console.log(`Gestisco messaggio WebRTC di tipo ${data.type} da ${extWs.userId} a ${data.recipientId}`);
+            
+            // Trova il destinatario
+            const recipient = Array.from(wss.clients).find(
+              (client) => (client as ExtendedWebSocket).userId === data.recipientId
+            ) as ExtendedWebSocket;
+
+            if (recipient && recipient.readyState === WebSocket.OPEN) {
+              console.log(`Inoltro messaggio ${data.type} al destinatario ${data.recipientId}`);
+              // Aggiungi il nome utente del mittente al messaggio
+              const messageWithSender = {
+                ...data,
+                senderId: extWs.userId,
+                senderUsername: extWs.username
+              };
+              recipient.send(JSON.stringify(messageWithSender));
+              console.log('Messaggio inoltrato con successo');
+            } else {
+              console.log(`Destinatario ${data.recipientId} non trovato o non disponibile`);
+              // Invia un messaggio di errore al mittente
+              if (extWs.readyState === WebSocket.OPEN) {
+                extWs.send(JSON.stringify({
+                  type: 'call_error',
+                  error: 'Destinatario non disponibile'
+                }));
+              }
+            }
+          }
         } catch (error) {
-          console.error('Errore durante la gestione del messaggio:', error);
+          console.error('Errore durante l\'elaborazione del messaggio:', error);
         }
       });
 
@@ -339,8 +373,8 @@ try {
         });
       });
     } catch (error) {
-      console.error('Errore durante la gestione della connessione WebSocket:', error);
-      ws.close(1011, 'Errore interno del server');
+      console.error('Errore durante la connessione WebSocket:', error);
+      ws.close();
     }
   });
 
