@@ -25,8 +25,17 @@ document.addEventListener("DOMContentLoaded", () => {
     let peerConnection = null;
     let localStream = null;
     let isCallActive = false;
-    const startCallButton = document.getElementById('start-audio-call');
+    let isVideoCall = false;
+    let isAudioEnabled = true;
+    let isVideoEnabled = true;
+    const startAudioCallButton = document.getElementById('start-audio-call');
+    const startVideoCallButton = document.getElementById('start-video-call');
     const endCallButton = document.getElementById('end-call');
+    const localVideo = document.getElementById('local-video');
+    const remoteVideo = document.getElementById('remote-video');
+    const videoContainer = document.getElementById('video-container');
+    const toggleAudioButton = document.getElementById('toggle-audio');
+    const toggleVideoButton = document.getElementById('toggle-video');
 
     // Configurazione WebRTC
     const configuration = {
@@ -332,9 +341,10 @@ document.addEventListener("DOMContentLoaded", () => {
                 if (li.dataset.userId === recipientId.toString()) {
                     li.classList.add("active");
                     // Aggiorniamo il titolo del pulsante di chiamata con il nome dell'utente
-                    if (startCallButton) {
+                    if (startAudioCallButton) {
                         const username = li.textContent.trim();
-                        startCallButton.title = `Chiama ${username}`;
+                        startAudioCallButton.title = `Avvia chiamata audio con ${username}`;
+                        startVideoCallButton.title = `Avvia videochiamata con ${username}`;
                     }
                 } else {
                     li.classList.remove("active");
@@ -443,19 +453,32 @@ document.addEventListener("DOMContentLoaded", () => {
 
     // Funzioni per la gestione delle chiamate
     function initializeCallButtons() {
-        if (startCallButton) {
-            startCallButton.onclick = startCall;
-            console.log('Pulsante chiamata inizializzato');
+        if (startAudioCallButton) {
+            startAudioCallButton.onclick = () => startCall(false);
+            console.log('Pulsante chiamata audio inizializzato');
+        }
+        if (startVideoCallButton) {
+            startVideoCallButton.onclick = () => startCall(true);
+            console.log('Pulsante videochiamata inizializzato');
         }
         if (endCallButton) {
             endCallButton.onclick = endCall;
             console.log('Pulsante fine chiamata inizializzato');
         }
+        if (toggleAudioButton) {
+            toggleAudioButton.onclick = toggleAudio;
+            console.log('Pulsante toggle audio inizializzato');
+        }
+        if (toggleVideoButton) {
+            toggleVideoButton.onclick = toggleVideo;
+            console.log('Pulsante toggle video inizializzato');
+        }
     }
 
-    async function startCall() {
+    async function startCall(withVideo = false) {
         try {
             console.log('=== INIZIO AVVIO CHIAMATA ===');
+            console.log('Tipo chiamata:', withVideo ? 'Video' : 'Audio');
             console.log('ID utente corrente:', userId);
             console.log('Destinatario:', currentRecipientId);
             
@@ -478,21 +501,29 @@ document.addEventListener("DOMContentLoaded", () => {
             const recipientName = recipientLi ? recipientLi.textContent.trim() : 'utente';
             
             // Mostriamo un feedback visivo che stiamo chiamando
-            if (startCallButton) {
-                startCallButton.title = `Chiamata in corso con ${recipientName}...`;
+            const callButton = withVideo ? startVideoCallButton : startAudioCallButton;
+            if (callButton) {
+                callButton.title = `Chiamata in corso con ${recipientName}...`;
             }
 
-            console.log('Richiedo permessi audio...');
+            console.log('Richiedo permessi media...');
             localStream = await navigator.mediaDevices.getUserMedia({
                 audio: true,
-                video: false
+                video: withVideo
             });
-            console.log('Permessi audio ottenuti');
+            console.log('Permessi media ottenuti');
 
+            // Se è una videochiamata, mostriamo il video locale
+            if (withVideo && localVideo) {
+                localVideo.srcObject = localStream;
+                videoContainer.style.display = 'flex';
+            }
+
+            isVideoCall = withVideo;
             createPeerConnection();
 
             localStream.getTracks().forEach(track => {
-                console.log('Aggiungo traccia audio:', track.kind);
+                console.log('Aggiungo traccia:', track.kind);
                 peerConnection.addTrack(track, localStream);
             });
 
@@ -511,7 +542,8 @@ document.addEventListener("DOMContentLoaded", () => {
                 recipientId: currentRecipientId,
                 senderId: userId,
                 offer: offer,
-                senderUsername: senderUsername
+                senderUsername: senderUsername,
+                isVideo: withVideo
             };
 
             console.log('Invio offerta al destinatario:', callMessage);
@@ -538,16 +570,22 @@ document.addEventListener("DOMContentLoaded", () => {
                 socket.send(JSON.stringify({
                     type: 'ice_candidate',
                     recipientId: currentRecipientId,
+                    senderId: userId,
                     candidate: event.candidate
                 }));
             }
         };
 
         peerConnection.ontrack = event => {
-            console.log('Ricevuta traccia audio remota');
-            const audio = new Audio();
-            audio.srcObject = event.streams[0];
-            audio.play().catch(e => console.error('Errore riproduzione audio:', e));
+            console.log('Ricevuta traccia remota:', event.track.kind);
+            if (event.track.kind === 'video' && remoteVideo) {
+                remoteVideo.srcObject = event.streams[0];
+                videoContainer.style.display = 'flex';
+            } else if (event.track.kind === 'audio') {
+                const audio = new Audio();
+                audio.srcObject = event.streams[0];
+                audio.play().catch(e => console.error('Errore riproduzione audio:', e));
+            }
         };
 
         peerConnection.oniceconnectionstatechange = () => {
@@ -566,7 +604,8 @@ document.addEventListener("DOMContentLoaded", () => {
         if (currentRecipientId) {
             socket.send(JSON.stringify({
                 type: 'call_end',
-                recipientId: currentRecipientId
+                recipientId: currentRecipientId,
+                senderId: userId
             }));
         }
     }
@@ -576,7 +615,7 @@ document.addEventListener("DOMContentLoaded", () => {
         if (localStream) {
             localStream.getTracks().forEach(track => {
                 track.stop();
-                console.log('Traccia audio fermata:', track.kind);
+                console.log('Traccia fermata:', track.kind);
             });
             localStream = null;
         }
@@ -587,32 +626,92 @@ document.addEventListener("DOMContentLoaded", () => {
             console.log('Connessione peer chiusa');
         }
 
+        // Pulizia video
+        if (localVideo) {
+            localVideo.srcObject = null;
+            localVideo.style.display = 'block'; // Reset display style
+        }
+        if (remoteVideo) {
+            remoteVideo.srcObject = null;
+        }
+        if (videoContainer) {
+            videoContainer.style.display = 'none';
+        }
+
         isCallActive = false;
+        isVideoCall = false;
+        isAudioEnabled = true;
+        isVideoEnabled = true;
         updateCallUI();
     }
 
     function updateCallUI() {
         console.log('Aggiorno UI chiamata, stato attivo:', isCallActive);
-        if (startCallButton) {
-            startCallButton.style.display = isCallActive ? 'none' : 'inline-block';
-            // Aggiorniamo anche il titolo del pulsante per mostrare con chi stiamo chiamando
+        
+        // Gestione pulsanti chiamata
+        if (startAudioCallButton) {
+            startAudioCallButton.style.display = isCallActive ? 'none' : 'inline-block';
+            startAudioCallButton.disabled = !currentRecipientId;
+            startAudioCallButton.style.opacity = currentRecipientId ? '1' : '0.5';
             if (!isCallActive) {
-                startCallButton.title = currentRecipientId ? 'Chiama' : 'Seleziona un utente per chiamare';
+                startAudioCallButton.title = currentRecipientId ? 'Avvia chiamata audio' : 'Seleziona un utente per chiamare';
+            }
+        }
+        if (startVideoCallButton) {
+            startVideoCallButton.style.display = isCallActive ? 'none' : 'inline-block';
+            startVideoCallButton.disabled = !currentRecipientId;
+            startVideoCallButton.style.opacity = currentRecipientId ? '1' : '0.5';
+            if (!isCallActive) {
+                startVideoCallButton.title = currentRecipientId ? 'Avvia videochiamata' : 'Seleziona un utente per chiamare';
             }
         }
         if (endCallButton) {
             endCallButton.style.display = isCallActive ? 'inline-block' : 'none';
         }
 
-        // Aggiorniamo lo stato visivo del pulsante di chiamata
-        if (startCallButton) {
-            if (!currentRecipientId) {
-                startCallButton.disabled = true;
-                startCallButton.style.opacity = '0.5';
-            } else {
-                startCallButton.disabled = false;
-                startCallButton.style.opacity = '1';
+        // Gestione pulsanti toggle
+        if (toggleAudioButton) {
+            toggleAudioButton.style.display = isCallActive ? 'inline-block' : 'none';
+            toggleAudioButton.innerHTML = isAudioEnabled ? 
+                '<i class="fas fa-microphone"></i>' : 
+                '<i class="fas fa-microphone-slash"></i>';
+            toggleAudioButton.title = isAudioEnabled ? 'Disattiva microfono' : 'Attiva microfono';
+        }
+        if (toggleVideoButton) {
+            toggleVideoButton.style.display = (isCallActive && isVideoCall) ? 'inline-block' : 'none';
+            toggleVideoButton.innerHTML = isVideoEnabled ? 
+                '<i class="fas fa-video"></i>' : 
+                '<i class="fas fa-video-slash"></i>';
+            toggleVideoButton.title = isVideoEnabled ? 'Disattiva webcam' : 'Attiva webcam';
+        }
+    }
+
+    function toggleAudio() {
+        if (!localStream) return;
+        
+        const audioTrack = localStream.getAudioTracks()[0];
+        if (audioTrack) {
+            isAudioEnabled = !isAudioEnabled;
+            audioTrack.enabled = isAudioEnabled;
+            console.log('Audio ' + (isAudioEnabled ? 'attivato' : 'disattivato'));
+            updateCallUI();
+        }
+    }
+
+    function toggleVideo() {
+        if (!localStream || !isVideoCall) return;
+        
+        const videoTrack = localStream.getVideoTracks()[0];
+        if (videoTrack) {
+            isVideoEnabled = !isVideoEnabled;
+            videoTrack.enabled = isVideoEnabled;
+            console.log('Video ' + (isVideoEnabled ? 'attivato' : 'disattivato'));
+            
+            // Aggiorna l'anteprima locale
+            if (localVideo) {
+                localVideo.style.display = isVideoEnabled ? 'block' : 'none';
             }
+            updateCallUI();
         }
     }
 
@@ -690,8 +789,9 @@ document.addEventListener("DOMContentLoaded", () => {
                 return;
             }
 
+            const callType = data.isVideo ? 'videochiamata' : 'chiamata audio';
             console.log('Mostro popup di conferma');
-            const accept = confirm(`${data.senderUsername || 'Qualcuno'} vuole chiamarti. Accetti?`);
+            const accept = confirm(`${data.senderUsername || 'Qualcuno'} vuole avviare una ${callType}. Accetti?`);
 
             if (!accept) {
                 console.log('Utente ha rifiutato la chiamata');
@@ -704,17 +804,24 @@ document.addEventListener("DOMContentLoaded", () => {
             }
 
             console.log('Utente ha accettato la chiamata');
-            console.log('Richiedo permessi audio...');
+            console.log('Richiedo permessi media...');
             localStream = await navigator.mediaDevices.getUserMedia({
                 audio: true,
-                video: false
+                video: data.isVideo
             });
-            console.log('Permessi audio ottenuti');
+            console.log('Permessi media ottenuti');
 
+            // Se è una videochiamata, mostriamo il video locale
+            if (data.isVideo && localVideo) {
+                localVideo.srcObject = localStream;
+                videoContainer.style.display = 'flex';
+            }
+
+            isVideoCall = data.isVideo;
             createPeerConnection();
 
             localStream.getTracks().forEach(track => {
-                console.log('Aggiungo traccia audio alla risposta:', track.kind);
+                console.log('Aggiungo traccia alla risposta:', track.kind);
                 peerConnection.addTrack(track, localStream);
             });
 
